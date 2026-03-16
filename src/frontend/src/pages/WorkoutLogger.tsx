@@ -1,9 +1,10 @@
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Check, Loader2, Plus, Search, Timer, Trash2 } from "lucide-react";
+import { Check, Loader2, Plus, Search, Timer, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import RestTimer from "../components/RestTimer";
 import {
@@ -11,10 +12,10 @@ import {
   Goal,
   useAwardBadge,
   useCreateWorkoutSession,
-  useGetExerciseLibrary,
   useGetMyBadges,
   useGetMyWorkouts,
 } from "../hooks/useQueries";
+import { ALL_EXERCISES, type LocalExercise } from "../lib/exerciseData";
 import { GOAL_EMOJIS, GOAL_LABELS, getGoalClass } from "../lib/goalUtils";
 
 interface SetEntry {
@@ -24,35 +25,91 @@ interface SetEntry {
 }
 
 interface ExerciseEntry {
-  exercise: Exercise;
+  exercise: LocalExercise;
   sets: SetEntry[];
   uid: string;
 }
 
+const MUSCLE_GROUPS = [
+  "All",
+  "Chest",
+  "Back",
+  "Shoulders",
+  "Biceps",
+  "Triceps",
+  "Legs",
+  "Core",
+  "Glutes",
+  "Cardio",
+  "Full Body",
+];
+
+const MUSCLE_FILTER_MAP: Record<string, string[]> = {
+  Chest: ["Chest", "Upper Chest", "Lower Chest"],
+  Back: [
+    "Back",
+    "Lats",
+    "Upper Back",
+    "Middle Back",
+    "Lower Back",
+    "Rhomboids",
+    "Traps",
+  ],
+  Shoulders: ["Shoulders", "Side Deltoids", "Front Deltoids", "Rear Deltoids"],
+  Biceps: [
+    "Biceps",
+    "Biceps Long Head",
+    "Biceps Short Head",
+    "Brachialis",
+    "Brachioradialis",
+  ],
+  Triceps: ["Triceps", "Triceps Long Head"],
+  Legs: ["Quads", "Hamstrings", "Calves", "Soleus", "Inner Thigh"],
+  Core: ["Abs", "Obliques", "Core", "Lower Abs"],
+  Glutes: ["Glutes", "Hip Abductors", "Hip Flexors"],
+  Cardio: ["Cardio", "Full Body"],
+  "Full Body": ["Full Body"],
+};
+
 export default function WorkoutLogger() {
   const [goal, setGoal] = useState<Goal>(Goal.muscleBuilding);
   const [search, setSearch] = useState("");
+  const [muscleFilter, setMuscleFilter] = useState("All");
   const [entries, setEntries] = useState<ExerciseEntry[]>([]);
   const [showExerciseList, setShowExerciseList] = useState(false);
   const [timerOpen, setTimerOpen] = useState(false);
   const [timerDuration, setTimerDuration] = useState(60);
   const [saved, setSaved] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
 
-  const { data: library } = useGetExerciseLibrary();
   const { data: existingWorkouts } = useGetMyWorkouts();
   const { data: myBadges } = useGetMyBadges();
   const createWorkout = useCreateWorkoutSession();
   const awardBadge = useAwardBadge();
 
-  const filteredLibrary = (library ?? []).filter(
-    (e) =>
-      e.name.toLowerCase().includes(search.toLowerCase()) ||
-      e.primaryMuscles.some((m) =>
-        m.toLowerCase().includes(search.toLowerCase()),
-      ),
-  );
+  const filteredLibrary = useMemo(() => {
+    const q = search.toLowerCase();
+    return ALL_EXERCISES.filter((e) => {
+      const matchesSearch =
+        !q ||
+        e.name.toLowerCase().includes(q) ||
+        e.primaryMuscles.some((m) => m.toLowerCase().includes(q)) ||
+        e.category.toLowerCase().includes(q) ||
+        (e.equipment ?? "").toLowerCase().includes(q);
 
-  const addExercise = useCallback((ex: Exercise) => {
+      const matchesMuscle =
+        muscleFilter === "All" ||
+        (MUSCLE_FILTER_MAP[muscleFilter] ?? []).some((tag) =>
+          e.primaryMuscles.some((m) =>
+            m.toLowerCase().includes(tag.toLowerCase()),
+          ),
+        );
+
+      return matchesSearch && matchesMuscle;
+    });
+  }, [search, muscleFilter]);
+
+  const addExercise = useCallback((ex: LocalExercise) => {
     setEntries((prev) => [
       ...prev,
       {
@@ -134,6 +191,10 @@ export default function WorkoutLogger() {
     }
   };
 
+  // Convert LocalExercise goal to getGoalClass compatible
+  const exerciseGoalClass = (ex: LocalExercise) =>
+    getGoalClass(ex.goal as Exercise["goal"]);
+
   return (
     <div
       data-ocid="workout.page"
@@ -169,21 +230,30 @@ export default function WorkoutLogger() {
       </div>
 
       {/* Exercise Search */}
-      <div className="relative">
+      <div className="relative" ref={searchRef}>
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               data-ocid="workout.exercise_search_input"
-              placeholder="Search exercises..."
+              placeholder={`Search ${ALL_EXERCISES.length}+ exercises by name, muscle, or equipment...`}
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
                 setShowExerciseList(true);
               }}
               onFocus={() => setShowExerciseList(true)}
-              className="pl-9 bg-secondary border-border"
+              className="pl-9 pr-9 bg-secondary border-border"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
           <Button
             type="button"
@@ -204,38 +274,100 @@ export default function WorkoutLogger() {
               exit={{ opacity: 0, y: -8 }}
               className="absolute z-20 w-full mt-2"
             >
-              <div className="gym-card overflow-hidden">
-                <ScrollArea className="h-56">
+              <div className="gym-card overflow-hidden shadow-xl border-border">
+                {/* Muscle Group Filters */}
+                <div className="p-2 border-b border-border">
+                  <div className="overflow-x-auto scrollbar-hide">
+                    <div className="flex gap-1.5 pb-1 min-w-max">
+                      {MUSCLE_GROUPS.map((mg) => (
+                        <button
+                          type="button"
+                          key={mg}
+                          onClick={() => setMuscleFilter(mg)}
+                          className={`px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                            muscleFilter === mg
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-secondary text-muted-foreground hover:bg-secondary/70"
+                          }`}
+                        >
+                          {mg}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Results count */}
+                <div className="px-4 py-1.5 text-xs text-muted-foreground border-b border-border bg-secondary/30">
+                  {filteredLibrary.length} exercise
+                  {filteredLibrary.length !== 1 ? "s" : ""}
+                  {search && ` for "${search}"`}
+                  {muscleFilter !== "All" && ` · ${muscleFilter}`}
+                </div>
+
+                <ScrollArea className="h-64">
                   {filteredLibrary.length === 0 ? (
-                    <div className="p-4 text-center text-muted-foreground text-sm">
-                      No exercises found.
+                    <div
+                      data-ocid="workout.exercise_search.empty_state"
+                      className="p-6 text-center text-muted-foreground text-sm"
+                    >
+                      <div className="text-2xl mb-2">🔍</div>
+                      No exercises found. Try a different search.
                     </div>
                   ) : (
-                    filteredLibrary.map((ex) => (
+                    filteredLibrary.map((ex, idx) => (
                       <button
                         type="button"
-                        key={ex.id.toString()}
+                        key={ex.id}
+                        data-ocid={
+                          idx < 3
+                            ? `workout.exercise_result.item.${idx + 1}`
+                            : undefined
+                        }
                         onClick={() => addExercise(ex)}
                         className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-secondary/70 transition-colors text-left border-b border-border last:border-0"
                       >
-                        <div>
-                          <span className="text-sm font-medium">{ex.name}</span>
-                          <div className="flex gap-1 mt-0.5">
-                            {ex.primaryMuscles.slice(0, 2).map((m) => (
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium truncate">
+                              {ex.name}
+                            </span>
+                            {ex.equipment && (
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                · {ex.equipment}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex gap-1 mt-0.5 flex-wrap">
+                            {ex.primaryMuscles.slice(0, 3).map((m) => (
                               <span
                                 key={m}
-                                className={`text-xs rounded px-1.5 py-0.5 border ${getGoalClass(ex.goal)}`}
+                                className={`text-xs rounded px-1.5 py-0.5 border ${exerciseGoalClass(ex)}`}
                               >
                                 {m}
                               </span>
                             ))}
+                            <span className="text-xs text-muted-foreground">
+                              {ex.category}
+                            </span>
                           </div>
                         </div>
-                        <Plus className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <Plus className="w-4 h-4 text-muted-foreground flex-shrink-0 ml-2" />
                       </button>
                     ))
                   )}
                 </ScrollArea>
+
+                {/* Close button */}
+                <div className="p-2 border-t border-border flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowExerciseList(false)}
+                    className="text-xs text-muted-foreground hover:text-foreground px-3 py-1 rounded hover:bg-secondary transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </motion.div>
           )}
@@ -256,15 +388,20 @@ export default function WorkoutLogger() {
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="font-semibold">{entry.exercise.name}</h3>
-                  <div className="flex gap-1 mt-1">
+                  <div className="flex gap-1 mt-1 flex-wrap">
                     {entry.exercise.primaryMuscles.map((m) => (
                       <span
                         key={m}
-                        className={`text-xs rounded px-1.5 py-0.5 border ${getGoalClass(entry.exercise.goal)}`}
+                        className={`text-xs rounded px-1.5 py-0.5 border ${exerciseGoalClass(entry.exercise)}`}
                       >
                         {m}
                       </span>
                     ))}
+                    {entry.exercise.equipment && (
+                      <Badge variant="outline" className="text-xs">
+                        {entry.exercise.equipment}
+                      </Badge>
+                    )}
                   </div>
                 </div>
                 <button
@@ -353,7 +490,8 @@ export default function WorkoutLogger() {
           >
             <div className="text-4xl mb-3">🏋️</div>
             <p className="text-muted-foreground">
-              Search and add exercises above to start logging
+              Search from {ALL_EXERCISES.length}+ exercises above to start
+              logging
             </p>
           </div>
         )}
